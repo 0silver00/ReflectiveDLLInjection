@@ -80,6 +80,7 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 	ULONG_PTR uiValueE;
 
 	// STEP 0: calculate our images current base address
+	// step 0: image의 현재 base address 계산
 
 	// we will start searching backwards from our callers return address.
 	uiLibraryAddress = caller();
@@ -87,6 +88,7 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 	// loop through memory backwards searching for our images base address
 	// we dont need SEH style search as we shouldnt generate any access violations with this
 	while( TRUE )
+	// MZ/PE를 찾을때까지 무한루프
 	{
 		if( ((PIMAGE_DOS_HEADER)uiLibraryAddress)->e_magic == IMAGE_DOS_SIGNATURE )
 		{
@@ -105,6 +107,7 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 	}
 
 	// STEP 1: process the kernels exports for the functions our loader needs...
+	// step 1. 로더가 필요로 하는 기능을 위해 커널 엑스포트를 처리
 
 	// get the Process Enviroment Block
 #ifdef WIN_X64
@@ -118,24 +121,31 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 #endif
 
 	// get the processes loaded modules. ref: http://msdn.microsoft.com/en-us/library/aa813708(VS.85).aspx
+	// 프로세스 모듈 가져오기
 	uiBaseAddress = (ULONG_PTR)((_PPEB)uiBaseAddress)->pLdr;
 
 	// get the first entry of the InMemoryOrder module list
+	// uiBaseAddress 모듈 리스트의 첫번째 항목 가져오기
 	uiValueA = (ULONG_PTR)((PPEB_LDR_DATA)uiBaseAddress)->InMemoryOrderModuleList.Flink;
 	while( uiValueA )
+	//리스트의 모든 항목을 순회
 	{
 		// get pointer to current modules name (unicode string)
+		// 해당 리스트의 이름 주소값을 가져옴
 		uiValueB = (ULONG_PTR)((PLDR_DATA_TABLE_ENTRY)uiValueA)->BaseDllName.pBuffer;
 		// set bCounter to the length for the loop
+		// 반복문을 위한 길이 가져오기
 		usCounter = ((PLDR_DATA_TABLE_ENTRY)uiValueA)->BaseDllName.Length;
 		// clear uiValueC which will store the hash of the module name
 		uiValueC = 0;
 
 		// compute the hash of the module name...
+		// 모듈 이름의 해시값 계산 및 소문자로 변환
 		do
 		{
 			uiValueC = ror( (DWORD)uiValueC );
 			// normalize to uppercase if the madule name is in lowercase
+			// 대문자->소문자 변환
 			if( *((BYTE *)uiValueB) >= 'a' )
 				uiValueC += *((BYTE *)uiValueB) - 0x20;
 			else
@@ -144,49 +154,66 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 		} while( --usCounter );
 
 		// compare the hash with that of kernel32.dll
+		// 해시값과 kernel32.dll 해시값과 비교
 		if( (DWORD)uiValueC == KERNEL32DLL_HASH )
+		// uiValueC와 kernel32.dll의 해시값이 같으면,
 		{
 			// get this modules base address
+			// 리스트 항목의 base address 가져옴
 			uiBaseAddress = (ULONG_PTR)((PLDR_DATA_TABLE_ENTRY)uiValueA)->DllBase;
 
 			// get the VA of the modules NT Header
+			// NT헤더 위치 가져오기
 			uiExportDir = uiBaseAddress + ((PIMAGE_DOS_HEADER)uiBaseAddress)->e_lfanew;
 
 			// uiNameArray = the address of the modules export directory entry
+			// 옵셔널헤더의 데이터 디렉터리 위치 가져오기
 			uiNameArray = (ULONG_PTR)&((PIMAGE_NT_HEADERS)uiExportDir)->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_EXPORT ];
 
 			// get the VA of the export directory
+			// 내보내기 디렉터리 위치 가져오기
 			uiExportDir = ( uiBaseAddress + ((PIMAGE_DATA_DIRECTORY)uiNameArray)->VirtualAddress );
 
 			// get the VA for the array of name pointers
+			// 내보내기 디렉터리의 함수이름 배열의 rva값 가져오기
 			uiNameArray = ( uiBaseAddress + ((PIMAGE_EXPORT_DIRECTORY )uiExportDir)->AddressOfNames );
 			
 			// get the VA for the array of name ordinals
+			// 내보내기 디렉터리의 서수 배열의 rva값 가져오기
 			uiNameOrdinals = ( uiBaseAddress + ((PIMAGE_EXPORT_DIRECTORY )uiExportDir)->AddressOfNameOrdinals );
 
+			// 왜 3일까요? 3개의 기능을 찾아넣으려고!
 			usCounter = 3;
 
 			// loop while we still have imports to find
 			while( usCounter > 0 )
 			{
 				// compute the hash values for this function name
+				// 내보내기 디렉터리의 함수 이름값 주소를 해시
 				dwHashValue = hash( (char *)( uiBaseAddress + DEREF_32( uiNameArray ) )  );
 				
 				// if we have found a function we want we get its virtual address
+				// 원하는 기능을 찾으면 가상주소 반환
 				if( dwHashValue == LOADLIBRARYA_HASH || dwHashValue == GETPROCADDRESS_HASH || dwHashValue == VIRTUALALLOC_HASH )
+				// 해시값이 LoadLibrary 또는 GetProcAddress 또는 VirtualAlloc과 같다면,
 				{
 					// get the VA for the array of addresses
+					// 내보내기 디렉터리의 함수 시작값 저장
 					uiAddressArray = ( uiBaseAddress + ((PIMAGE_EXPORT_DIRECTORY )uiExportDir)->AddressOfFunctions );
 
 					// use this functions name ordinal as an index into the array of name pointers
 					uiAddressArray += ( DEREF_16( uiNameOrdinals ) * sizeof(DWORD) );
 
 					// store this functions VA
+					// 함수 기능에 va 저장
 					if( dwHashValue == LOADLIBRARYA_HASH )
+					// LoadLibrary
 						pLoadLibraryA = (LOADLIBRARYA)( uiBaseAddress + DEREF_32( uiAddressArray ) );
 					else if( dwHashValue == GETPROCADDRESS_HASH )
+					// GetProcAdderss
 						pGetProcAddress = (GETPROCADDRESS)( uiBaseAddress + DEREF_32( uiAddressArray ) );
 					else if( dwHashValue == VIRTUALALLOC_HASH )
+					// VirualAlooc
 						pVirtualAlloc = (VIRTUALALLOC)( uiBaseAddress + DEREF_32( uiAddressArray ) );
 			
 					// decrement our counter
@@ -194,13 +221,16 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 				}
 
 				// get the next exported function name
+				// 다음 함수 주소
 				uiNameArray += sizeof(DWORD);
 
 				// get the next exported function name ordinal
+				// 다음 서수
 				uiNameOrdinals += sizeof(WORD);
 			}
 		}
 		else if( (DWORD)uiValueC == NTDLLDLL_HASH )
+		// uiValueC와 ntdll.dll의 해시값이 같으면,
 		{
 			// get this modules base address
 			uiBaseAddress = (ULONG_PTR)((PLDR_DATA_TABLE_ENTRY)uiValueA)->DllBase;
@@ -254,92 +284,122 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 		}
 
 		// we stop searching when we have found everything we need.
+		// 찾을거 다 찾았으면 break;
 		if( pLoadLibraryA && pGetProcAddress && pVirtualAlloc && pNtFlushInstructionCache )
 			break;
 
 		// get the next entry
+		// 다음 리스트 오세요
 		uiValueA = DEREF( uiValueA );
 	}
 
 	// STEP 2: load our image into a new permanent location in memory...
+	// step 2. 메모리의 새 영역에 이미지를 로드
 
 	// get the VA of the NT Header for the PE to be loaded
+	// NT헤더 위치 가져오기
 	uiHeaderValue = uiLibraryAddress + ((PIMAGE_DOS_HEADER)uiLibraryAddress)->e_lfanew;
 
 	// allocate all the memory for the DLL to be loaded into. we can load at any address because we will  
 	// relocate the image. Also zeros all memory and marks it as READ, WRITE and EXECUTE to avoid any problems.
+	// PE이미지의 크기만큼 가상메모리 할당
 	uiBaseAddress = (ULONG_PTR)pVirtualAlloc( NULL, ((PIMAGE_NT_HEADERS)uiHeaderValue)->OptionalHeader.SizeOfImage, MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE );
 
 	// we must now copy over the headers
+	// PE헤더의 크기
 	uiValueA = ((PIMAGE_NT_HEADERS)uiHeaderValue)->OptionalHeader.SizeOfHeaders;
+	// PE파일의 주소
 	uiValueB = uiLibraryAddress;
+	// 가상메모리 할당 주소
 	uiValueC = uiBaseAddress;
 
 	while( uiValueA-- )
+	// 헤더 크기만큼 가상메모리에 복사
 		*(BYTE *)uiValueC++ = *(BYTE *)uiValueB++;
 
 	// STEP 3: load in all of our sections...
+	// step 3. 모든 섹션을 로드
 
 	// uiValueA = the VA of the first section
+	// 옵셔널 헤더 + 옵셔널헤더 구조체의 크기
 	uiValueA = ( (ULONG_PTR)&((PIMAGE_NT_HEADERS)uiHeaderValue)->OptionalHeader + ((PIMAGE_NT_HEADERS)uiHeaderValue)->FileHeader.SizeOfOptionalHeader );
 	
 	// itterate through all sections, loading them into memory.
+	// 섹션 갯수
 	uiValueE = ((PIMAGE_NT_HEADERS)uiHeaderValue)->FileHeader.NumberOfSections;
+
 	while( uiValueE-- )
+	// 섹션 갯수만큼 반복
 	{
 		// uiValueB is the VA for this section
+		// 가상 메모리에서 섹션 시작 주소
 		uiValueB = ( uiBaseAddress + ((PIMAGE_SECTION_HEADER)uiValueA)->VirtualAddress );
 
 		// uiValueC if the VA for this sections data
+		// 파일에서 섹션 시작 주소
 		uiValueC = ( uiLibraryAddress + ((PIMAGE_SECTION_HEADER)uiValueA)->PointerToRawData );
 
 		// copy the section over
+		// 섹션의 크기
 		uiValueD = ((PIMAGE_SECTION_HEADER)uiValueA)->SizeOfRawData;
 
 		while( uiValueD-- )
+		// 섹션 크기만큼 파일 섹션을 가상메모리 섹션에 복사
 			*(BYTE *)uiValueB++ = *(BYTE *)uiValueC++;
 
 		// get the VA of the next section
+		// 네, 다음 섹션
 		uiValueA += sizeof( IMAGE_SECTION_HEADER );
 	}
 
 	// STEP 4: process our images import table...
+	// step 4. 이미지 가져오기 테이블 프로세스
 
 	// uiValueB = the address of the import directory
+	// 내보내기 디렉터리 주소 가져옴
 	uiValueB = (ULONG_PTR)&((PIMAGE_NT_HEADERS)uiHeaderValue)->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_IMPORT ];
 	
 	// we assume their is an import table to process
 	// uiValueC is the first entry in the import table
+	// 내보내기 디렉터리 주소의 가상주소(처음것?)
 	uiValueC = ( uiBaseAddress + ((PIMAGE_DATA_DIRECTORY)uiValueB)->VirtualAddress );
 	
-	// itterate through all imports
+	// iterate through all imports
 	while( ((PIMAGE_IMPORT_DESCRIPTOR)uiValueC)->Name )
+	// IAT 순회
 	{
 		// use LoadLibraryA to load the imported module into memory
 		uiLibraryAddress = (ULONG_PTR)pLoadLibraryA( (LPCSTR)( uiBaseAddress + ((PIMAGE_IMPORT_DESCRIPTOR)uiValueC)->Name ) );
 
 		// uiValueD = VA of the OriginalFirstThunk
+		// 바인딩되지 않은 RVA 가져오기
 		uiValueD = ( uiBaseAddress + ((PIMAGE_IMPORT_DESCRIPTOR)uiValueC)->OriginalFirstThunk );
 	
 		// uiValueA = VA of the IAT (via first thunk not origionalfirstthunk)
+		// IAT의 RVA 가져오기
 		uiValueA = ( uiBaseAddress + ((PIMAGE_IMPORT_DESCRIPTOR)uiValueC)->FirstThunk );
 
 		// itterate through all imported functions, importing by ordinal if no name present
+		// 가져온 모든 함수 반복(이름 없으면 서수로)
 		while( DEREF(uiValueA) )
 		{
 			// sanity check uiValueD as some compilers only import by FirstThunk
 			if( uiValueD && ((PIMAGE_THUNK_DATA)uiValueD)->u1.Ordinal & IMAGE_ORDINAL_FLAG )
 			{
 				// get the VA of the modules NT Header
+				// 로드라이브러리 한 것의 NT헤더 가져옴
 				uiExportDir = uiLibraryAddress + ((PIMAGE_DOS_HEADER)uiLibraryAddress)->e_lfanew;
 
 				// uiNameArray = the address of the modules export directory entry
+				// 내보내기 디렉터리 찾기
 				uiNameArray = (ULONG_PTR)&((PIMAGE_NT_HEADERS)uiExportDir)->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_EXPORT ];
 
 				// get the VA of the export directory
+				// 내보내기 디렉터리 주소 가져오기
 				uiExportDir = ( uiLibraryAddress + ((PIMAGE_DATA_DIRECTORY)uiNameArray)->VirtualAddress );
 
 				// get the VA for the array of addresses
+				// EAT 주소
 				uiAddressArray = ( uiLibraryAddress + ((PIMAGE_EXPORT_DIRECTORY )uiExportDir)->AddressOfFunctions );
 
 				// use the import ordinal (- export ordinal base) as an index into the array of addresses
@@ -357,6 +417,7 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 				DEREF(uiValueA) = (ULONG_PTR)pGetProcAddress( (HMODULE)uiLibraryAddress, (LPCSTR)((PIMAGE_IMPORT_BY_NAME)uiValueB)->Name );
 			}
 			// get the next imported function
+			// 다음 가져오기 함수
 			uiValueA += sizeof( ULONG_PTR );
 			if( uiValueD )
 				uiValueD += sizeof( ULONG_PTR );
@@ -367,11 +428,13 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 	}
 
 	// STEP 5: process all of our images relocations...
+	// step 5. 모든 이미지 재배치
 
 	// calculate the base address delta and perform relocations (even if we load at desired image base)
 	uiLibraryAddress = uiBaseAddress - ((PIMAGE_NT_HEADERS)uiHeaderValue)->OptionalHeader.ImageBase;
 
 	// uiValueB = the address of the relocation directory
+	// 재배치 디렉터리
 	uiValueB = (ULONG_PTR)&((PIMAGE_NT_HEADERS)uiHeaderValue)->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_BASERELOC ];
 
 	// check if their are any relocations present
@@ -450,11 +513,14 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 	}
 
 	// STEP 6: call our images entry point
+	// step 6. 이미지 엔트리 포인트를 콜함
 
 	// uiValueA = the VA of our newly loaded DLL/EXE's entry point
+	// 엔트리 포인트의 RVA
 	uiValueA = ( uiBaseAddress + ((PIMAGE_NT_HEADERS)uiHeaderValue)->OptionalHeader.AddressOfEntryPoint );
 
 	// We must flush the instruction cache to avoid stale code being used which was updated by our relocation processing.
+	// 캐시 비우기
 	pNtFlushInstructionCache( (HANDLE)-1, NULL, 0 );
 
 	// call our respective entry point, fudging our hInstance value
@@ -467,6 +533,7 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader( VOID )
 #endif
 
 	// STEP 8: return our new entry point address so whatever called us can call DllMain() if needed.
+	// step 8. DllMain()을 반환할 수 있게끔 새로운 엔트리 포인터 주소를 반환해라
 	return uiValueA;
 }
 //===============================================================================================//

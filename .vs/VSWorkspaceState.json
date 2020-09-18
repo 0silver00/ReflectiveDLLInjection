@@ -1,0 +1,11 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\dll",
+    "\\dll\\src",
+    "\\inject",
+    "\\inject\\src"
+  ],
+  "SelectedNode": "\\dll\\src\\ReflectiveLoader.c",
+  "PreviewInSolutionExplorer": false
+}
